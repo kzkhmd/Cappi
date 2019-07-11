@@ -15,7 +15,11 @@ FRAMERATE           = 30
 
 
 class CameraController():
-    ''' Camera Controller Class '''
+    '''
+    カメラ制御クラス
+    PiCameraインスタンスとDetectionControllerインスタンスを持ち、
+    動体の検出に応じて録画を開始/停止する
+    '''
     
     def __init__( self ):
         self.camera            = picamera.PiCamera( resolution=RESOLUTION, framerate=FRAMERATE )
@@ -23,9 +27,11 @@ class CameraController():
     
     
     def control_recording( self ):
+        '''
+        動体の検出に応じて録画の開始/停止を制御する
+        '''
         try:
             self.detection_ctrlr.set_detection( 'frame subtraction' )
-            self.detection_ctrlr.init_detection()
             
             while True:
                 if self.detection_ctrlr.detection_is_enabled == True:
@@ -35,14 +41,10 @@ class CameraController():
                         if self.camera.recording == False:
                             self.camera.start_recording( 'video'+datetime.datetime.now().strftime('%Y-%m-%d-%H%M%S')+'.h264')
                             print( 'Start recording' )
-                        else:
-                            pass
                     else:
                         if self.camera.recording == True:
                             self.camera.stop_recording()
                             print( 'Stop recording' )
-                        else:
-                            pass
         
         finally:
             if self.camera.recording == True:
@@ -53,42 +55,33 @@ class CameraController():
             print( 'Done closing' )
             
 
-
 class DetectionController():
-    ''' Detection Controller Class '''
+    ''' Detection Controllerクラス（Proxyパターン）'''
     
     def __init__( self, camera ):
         self.camera               = camera
         self.detection_is_enabled = True
     
     
-    def set_detection( self, detection_algorithm ):
-        ''' Set up detection '''
+    def set_detection( self, algorithm=None ):
+        ''' 動体検出アルゴリズムを設定する '''
         
-        if detection_algorithm == None:
+        if algorithm == None:
             print( 'Please select detection algorithm' )
             return
         
-        if detection_algorithm == 'frame subtraction':
-            self.detection_algorithm = detection_algorithm
-            self.detection_init      = self._init_frame_subtraction
-            self.detection_fin       = self._fin_frame_subtraction
-            self.detection_func      = self._func_frame_subtraction
+        # フレーム差分法
+        if algorithm == 'frame subtraction':
+            self.algorithm = FrameSubtraction( self.camera )
+            print( 'Initialized detection' )
         
         print( 'Done setting up detection' )
-    
-    
-    def init_detection( self ):
-        ''' Initialize detection '''
-        
-        self.detection_init()
-        print( 'Initialized detection' )
     
     
     def fin_detection( self ):
         ''' Finalize detection '''
         
-        self.detection_fin()
+        self.algorithm.fin()
         print( 'Finalized detection' )
     
     
@@ -96,18 +89,20 @@ class DetectionController():
         ''' Detect '''
         # return True/False
         
-        return self.detection_func()
+        return self.algorithm.func()
     
-    
-    def _init_frame_subtraction( self ):
-        ''' Initializer of frame subtraction '''
-        
+
+class FrameSubtraction():
+    ''' Frame Subtraction algorithm '''
+
+    def __init__( self, camera ):
+        self.camera = camera
         self.frame1 = picamera.array.PiRGBArray( self.camera )
         self.frame2 = picamera.array.PiRGBArray( self.camera )
         self.frame3 = picamera.array.PiRGBArray( self.camera )
     
     
-    def _fin_frame_subtraction( self ):
+    def fin( self ):
         ''' Finalizer of frame subtraction '''
         
         self.frame1.close()
@@ -115,26 +110,27 @@ class DetectionController():
         self.frame3.close()
     
     
-    def _func_frame_subtraction( self ):
-        ''' Frame subtraction algorithm for motion detection '''
-        
-        # Capture frame
+    def func( self ):
+        ''' フレーム差分法による動体検出アルゴリズム '''
+        # return True/False
+
+        # フレームを３枚キャプチャ
         self.camera.capture( self.frame1, 'bgr', use_video_port=True )
         self.camera.capture( self.frame2, 'bgr', use_video_port=True )
         self.camera.capture( self.frame3, 'bgr', use_video_port=True )
         
-        # Convert RGB to Gray
+        # RGBからGrayへ変換
         frame1_gray = cv2.cvtColor( self.frame1.array, cv2.COLOR_BGR2GRAY )
         frame2_gray = cv2.cvtColor( self.frame2.array, cv2.COLOR_BGR2GRAY )
         frame3_gray = cv2.cvtColor( self.frame3.array, cv2.COLOR_BGR2GRAY )
         
-        # Frame subtraction
+        # フレーム差分の計算
         dif_img1 = cv2.absdiff( frame1_gray, frame2_gray )
         dif_img2 = cv2.absdiff( frame2_gray, frame3_gray )
         
         dif_imga = cv2.bitwise_and( dif_img1, dif_img2 )
         
-        # Binarize
+        # 2値化
         ret, bin_img = cv2.threshold( dif_imga, BINARIZE_TH, PIXEL_VAL_MAX, cv2.THRESH_BINARY)
         bin_img = cv2.medianBlur( bin_img, 7 )
         
@@ -145,7 +141,7 @@ class DetectionController():
             is_detected = False
             print( 'Not Detected' )
         
-        # It is necessary to use 'truncate(0)' before reuse frame1, frame2, frame3
+        # PiCameraモジュールの決まりで、frame1, frame2, frame3を再利用する前に truncate(0)する必要があるらしい
         self.frame1.truncate( 0 )
         self.frame2.truncate( 0 )
         self.frame3.truncate( 0 )
